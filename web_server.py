@@ -19,10 +19,11 @@ class WebServer:
 
     ALLOWED_IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp")
 
-    def __init__(self, plugin: Any, host: str = "0.0.0.0", port: int = 8765, data_dir: Path = None):
+    def __init__(self, plugin: Any, host: str = "0.0.0.0", port: int = 8765, token: str = "", data_dir: Path = None):
         self.plugin = plugin
         self.host = host
         self.port = port
+        self.token = token
         self.data_dir = data_dir or Path(__file__).parent / "pages"
         self._app: Optional[web.Application] = None
         self._runner: Optional[web.AppRunner] = None
@@ -145,6 +146,34 @@ class WebServer:
 
     def _setup_routes(self, app: web.Application):
         """注册所有路由"""
+        # Token 鉴权中间件
+        @web.middleware
+        async def auth_middleware(request: web.Request, handler):
+            # 静态页面通过 query 参数或 cookie 鉴权
+            if request.path == "/":
+                token = request.query.get("token", "")
+                if self.token and token != self.token:
+                    return web.Response(text="Token 无效", status=403)
+                # 设置 cookie 方便后续访问
+                resp = await handler(request)
+                if self.token and token == self.token:
+                    resp.set_cookie("token", token, max_age=86400)
+                return resp
+            
+            # API 请求检查 header、query 或 cookie
+            if request.path.startswith("/api/"):
+                token = (
+                    request.headers.get("Authorization", "").replace("Bearer ", "")
+                    or request.query.get("token", "")
+                    or request.cookies.get("token", "")
+                )
+                if self.token and token != self.token:
+                    return web.json_response({"success": False, "error": "未授权"}, status=401)
+            
+            return await handler(request)
+
+        app = web.Application(middlewares=[auth_middleware])
+        self._app = app
         # 静态文件
         app.router.add_get("/", self._handle_index)
         app.router.add_static("/assets/", path=self.data_dir, name="static")
@@ -163,6 +192,9 @@ class WebServer:
         app.router.add_post("/api/images/delete", self._handle_delete)
         app.router.add_post("/api/images/batch-delete", self._handle_batch_delete)
         app.router.add_post("/api/images/batch-move", self._handle_batch_move)
+        app.router.add_post("/api/images/batch-scope", self._handle_batch_scope)
+        app.router.add_post("/api/images/batch-upload", self._handle_batch_upload)
+        app.router.add_get("/api/images/batch-upload-status", self._handle_batch_upload_status)
         app.router.add_post("/api/categories/update", self._handle_categories_update)
         app.router.add_post("/api/categories/delete", self._handle_delete_category)
         app.router.add_post("/api/analyze", self._handle_analyze)
@@ -171,13 +203,16 @@ class WebServer:
 
     async def start(self):
         """启动服务器"""
-        self._app = web.Application()
-        self._setup_routes(self._app)
+        self._setup_routes(None)
         self._runner = web.AppRunner(self._app)
         await self._runner.setup()
         site = web.TCPSite(self._runner, self.host, self.port)
         await site.start()
         logger.info(f"[StealerWebUI] HTTP服务器监听: {self.host}:{self.port}")
+        if self.token:
+            logger.info("[StealerWebUI] Token 鉴权已启用")
+        else:
+            logger.warning("[StealerWebUI] Token 鉴权未启用，建议设置 token")
 
     async def stop(self):
         """停止服务器"""
@@ -531,6 +566,171 @@ class WebServer:
             return web.json_response({"success": True, "count": moved})
         except Exception as e:
             return web.json_response({"success": False, "error": str(e)})
+
+    async def _handle_batch_scope(self, request: web.Request) -> web.Response:
+        """批量修改作用域"""
+        try:
+            data = await request.json()
+            hashes = set(data.get("hashes", []))
+            scope = self._norm_scope(data.get("scope_mode"))
+            if not hashes or not scope:
+                return web.json_response({"success": False, "error": "缺少参数"})
+
+            index = dict(self._get_index())
+            updated = 0
+            skipped = 0
+
+            for _, m in index.items():
+                if not isinstance(m, dict) or m.get("hash") not in hashes:
+                    continue
+                if scope == "local" and not str(m.get("origin_target", "")).strip():
+                    skipped += 1
+                    continue
+                m["scope_mode"] = scope
+                updated += 1
+
+            await self._cache.set_cache("index_cache", index, persist=False)
+            db = self._db
+            if db and hasattr(db, "sync_index"):
+                await db.sync_index(index)
+
+            return web.json_response({"success": True, "count": updated, "skipped": skipped})
+        except Exception as e:
+            return web.json_response({"success": False, "error": str(e)})
+
+    async def _handle_batch_upload(self, request: web.Request) -> web.Response:
+        """批量上传"""
+        try:
+            reader = await request.multipart()
+            files_data = []
+            category = ""
+            auto_analyze = False
+
+            async for field in reader:
+                if field.name == "category":
+                    category = (await field.read()).decode()
+                elif field.name == "auto_analyze":
+                    auto_analyze = (await field.read()).decode().lower() == "true"
+                elif field.name == "files" or field.name == "file":
+                    filename = field.filename or "upload.png"
+                    ext = Path(filename).suffix.lower()
+                    if ext not in self.ALLOWED_IMAGE_EXTS:
+                        continue
+                    content = await field.read()
+                    if content:
+                        files_data.append({
+                            "filename": filename,
+                            "content": content,
+                            "hash": self._cache.compute_hash(content),
+                            "ext": ext,
+                        })
+
+            if not files_data:
+                return web.json_response({"success": False, "error": "没有上传有效的图片文件"})
+
+            fallback = category or (self._get_category_keys()[0] if self._get_category_keys() else None)
+            if not fallback:
+                return web.json_response({"success": False, "error": "未配置任何分类"})
+
+            task_id = str(uuid.uuid4())
+            if not hasattr(self, '_batch_tasks'):
+                self._batch_tasks = {}
+            self._batch_tasks[task_id] = {
+                "status": "processing",
+                "total": len(files_data),
+                "processed": 0,
+                "success": 0,
+                "failed": 0,
+                "results": [],
+            }
+            asyncio.create_task(self._process_batch(task_id, files_data, category, auto_analyze, fallback))
+            return web.json_response({"success": True, "task_id": task_id, "total": len(files_data)})
+        except Exception as e:
+            logger.error(f"[StealerWebUI] 批量上传失败: {e}", exc_info=True)
+            return web.json_response({"success": False, "error": str(e)})
+
+    async def _process_batch(self, task_id: str, files_data: list, category: str, auto_analyze: bool, fallback: str):
+        """处理批量上传任务"""
+        try:
+            task = self._batch_tasks.get(task_id)
+            if not task:
+                return
+            for fd in files_data:
+                try:
+                    tags, desc, scenes = [], "", []
+                    final_cat = category or fallback
+                    if auto_analyze:
+                        try:
+                            proc = getattr(self.plugin, "image_processor_service", None)
+                            if proc:
+                                import tempfile
+                                tmp = tempfile.NamedTemporaryFile(suffix=fd['ext'], delete=False)
+                                tmp.write(fd["content"])
+                                tmp.close()
+                                rc, rt, rd, _, rs = await proc.classify_image(
+                                    event=None, file_path=tmp.name,
+                                    categories=list(self._cfg.categories or []),
+                                    content_filtration=False,
+                                )
+                                try:
+                                    os.unlink(tmp.name)
+                                except Exception:
+                                    pass
+                                if rc:
+                                    final_cat = rc
+                                    tags = rt or []
+                                    desc = rd or ""
+                                    scenes = rs or []
+                        except Exception as e:
+                            logger.warning(f"[StealerWebUI] 自动分析失败: {e}")
+
+                    ts = int(datetime.now().timestamp())
+                    filename = f"{ts}_{uuid.uuid4().hex[:8]}{fd['ext']}"
+                    cat_dir = self._cfg.ensure_category_dir(final_cat)
+                    file_path = cat_dir / filename
+                    await asyncio.to_thread(file_path.write_bytes, fd["content"])
+
+                    data = {
+                        "hash": fd["hash"], "path": str(file_path), "category": final_cat,
+                        "tags": tags, "desc": desc, "scenes": scenes, "created_at": ts,
+                    }
+                    await self._cache.update_index(lambda cur: cur.__setitem__(str(file_path), data))
+
+                    task["results"].append({"hash": fd["hash"], "category": final_cat, "success": True})
+                    task["success"] += 1
+                except Exception as e:
+                    logger.error(f"[StealerWebUI] 处理文件 {fd['filename']} 失败: {e}")
+                    task["results"].append({"filename": fd["filename"], "success": False, "error": str(e)})
+                    task["failed"] += 1
+                task["processed"] += 1
+
+            db = self._db
+            if db and hasattr(db, "sync_index"):
+                idx = self._cache.get_index_cache_readonly()
+                await db.sync_index(idx)
+            task["status"] = "completed"
+        except Exception as e:
+            logger.error(f"[StealerWebUI] 批量上传任务 {task_id} 失败: {e}")
+            if task_id in self._batch_tasks:
+                self._batch_tasks[task_id]["status"] = "failed"
+                self._batch_tasks[task_id]["error"] = str(e)
+
+    async def _handle_batch_upload_status(self, request: web.Request) -> web.Response:
+        """查询批量上传任务状态"""
+        task_id = request.query.get("task_id", "").strip()
+        if not task_id:
+            return web.json_response({"success": False, "error": "无效的任务ID"})
+        if not hasattr(self, '_batch_tasks'):
+            self._batch_tasks = {}
+        task = self._batch_tasks.get(task_id)
+        if not task:
+            return web.json_response({"success": False, "error": "任务不存在或已过期"})
+        return web.json_response({
+            "success": True, "task_id": task_id, "status": task["status"],
+            "total": task["total"], "processed": task["processed"],
+            "success_count": task["success"], "failed_count": task["failed"],
+            "error": task.get("error", ""), "results": task.get("results", []),
+        })
 
     async def _handle_categories_update(self, request: web.Request) -> web.Response:
         try:

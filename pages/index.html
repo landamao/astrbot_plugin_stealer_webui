@@ -317,8 +317,17 @@
                     <button class="btn" :class="{primary: batchMode}" @click="batchMode=!batchMode; selected.clear()">
                         {{ batchMode ? '取消批量' : '批量' }}
                     </button>
-                    <button v-if="batchMode && selected.size" class="btn danger" @click="batchDelete">删除 ({{ selected.size }})</button>
+                    <template v-if="batchMode && selected.size">
+                        <button class="btn danger" @click="batchDelete">删除 ({{ selected.size }})</button>
+                        <select class="btn" v-model="batchMoveCat" @change="batchMove" style="min-width:100px">
+                            <option value="" disabled>移动到...</option>
+                            <option v-for="c in categories" :key="c.key" :value="c.key">{{ c.name || c.key }}</option>
+                        </select>
+                        <button class="btn" @click="batchScope('public')">设为公共</button>
+                        <button class="btn" @click="batchScope('local')">设为本群</button>
+                    </template>
                     <button class="btn primary" @click="showUpload=true">+ 添加</button>
+                    <button class="btn" @click="showBatchUpload=true">批量导入</button>
                 </div>
 
                 <!-- Loading -->
@@ -374,6 +383,14 @@
                                 <div class="info-value">{{ preview.scope_mode }}</div>
                             </div>
                             <div class="info-row">
+                                <div class="info-label">来源群号</div>
+                                <div class="info-value">{{ preview.origin_target || '无' }}</div>
+                            </div>
+                            <div class="info-row">
+                                <div class="info-label">哈希值</div>
+                                <div class="info-value" style="font-size:0.7rem;word-break:break-all">{{ preview.hash }}</div>
+                            </div>
+                            <div class="info-row">
                                 <div class="info-label">描述</div>
                                 <div class="info-value">{{ preview.desc || '暂无' }}</div>
                             </div>
@@ -390,6 +407,10 @@
                                     <span v-for="s in preview.scenes" :key="s" class="tag">{{ s }}</span>
                                     <span v-if="!preview.scenes?.length" style="color:var(--text2);font-size:0.8rem">无</span>
                                 </div>
+                            </div>
+                            <div class="info-row">
+                                <div class="info-label">添加时间</div>
+                                <div class="info-value">{{ formatDate(preview.created_at) }}</div>
                             </div>
                         </div>
                     </div>
@@ -427,6 +448,7 @@
                     <button class="btn" @click="startEdit">编辑</button>
                     <button class="btn" @click="toggleScope">{{ preview.scope_mode==='local' ? '解除限定' : '限定本群' }}</button>
                     <button class="btn danger" @click="deleteImage(preview)">删除</button>
+                    <button class="btn danger" @click="deleteImage(preview, true)" title="删除并加入黑名单">拉黑</button>
                 </template>
                 <template v-else>
                     <button class="btn" @click="editing=false">取消</button>
@@ -450,16 +472,82 @@
                     <p v-else style="color:var(--text2)">点击上传图片</p>
                 </div>
                 <div class="form-group" style="margin-top:16px">
-                    <label class="form-label">分类</label>
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+                        <label class="form-label" style="margin:0">分类</label>
+                        <button class="btn" style="font-size:0.7rem;padding:4px 10px" 
+                                :disabled="!uploadFile || analyzing" @click="analyzeUploadImage">
+                            {{ analyzing ? '分析中...' : 'VLM 识别' }}
+                        </button>
+                    </div>
                     <select class="form-select" v-model="uploadCat">
                         <option v-for="c in categories" :key="c.key" :value="c.key">{{ c.name || c.key }}</option>
                     </select>
+                </div>
+                <div v-if="uploadAnalysis" style="margin-top:12px;padding:12px;background:var(--bg3)">
+                    <div style="font-size:0.8rem;color:var(--gold);margin-bottom:8px">分析结果</div>
+                    <div style="font-size:0.8rem;color:var(--text2)">
+                        <div>分类: {{ uploadAnalysis.category }}</div>
+                        <div v-if="uploadAnalysis.tags?.length">标签: {{ uploadAnalysis.tags.join(', ') }}</div>
+                        <div v-if="uploadAnalysis.description">描述: {{ uploadAnalysis.description }}</div>
+                    </div>
                 </div>
             </div>
             <div class="modal-footer">
                 <button class="btn" @click="showUpload=false">取消</button>
                 <button class="btn primary" :disabled="!uploadFile || uploading" @click="doUpload">
                     {{ uploading ? '上传中...' : '确认添加' }}
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Batch Upload Modal -->
+    <div v-if="showBatchUpload" class="modal-overlay" @click.self="showBatchUpload=false">
+        <div class="modal">
+            <div class="modal-header">
+                <h2>批量导入</h2>
+                <button class="modal-close" @click="showBatchUpload=false">✕</button>
+            </div>
+            <div class="modal-body">
+                <div class="upload-area" @click="$refs.batchFileInput.click()">
+                    <input ref="batchFileInput" type="file" accept="image/*" multiple @change="onBatchFileSelect" style="display:none">
+                    <p v-if="!batchFiles.length" style="color:var(--text2)">点击选择多张图片</p>
+                    <div v-else>
+                        <p style="color:var(--gold)">已选择 {{ batchFiles.length }} 张图片</p>
+                        <p style="color:var(--text2);font-size:0.8rem">点击重新选择</p>
+                    </div>
+                </div>
+                <div class="form-group" style="margin-top:16px">
+                    <label class="form-label">分类</label>
+                    <select class="form-select" v-model="batchUploadCat">
+                        <option value="">自动选择</option>
+                        <option v-for="c in categories" :key="c.key" :value="c.key">{{ c.name || c.key }}</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+                        <input type="checkbox" v-model="batchAutoAnalyze">
+                        <span class="form-label" style="margin:0">VLM 自动分析分类</span>
+                    </label>
+                </div>
+                <div v-if="batchTaskId" style="margin-top:16px;padding:12px;background:var(--bg3)">
+                    <div style="display:flex;justify-content:space-between;margin-bottom:8px">
+                        <span>上传进度</span>
+                        <span>{{ batchProgress.processed }} / {{ batchProgress.total }}</span>
+                    </div>
+                    <div style="background:var(--bg);height:8px;overflow:hidden">
+                        <div style="background:var(--gold);height:100%;transition:width 0.3s"
+                             :style="{width: (batchProgress.total ? batchProgress.processed/batchProgress.total*100 : 0)+'%'}"></div>
+                    </div>
+                    <div style="margin-top:8px;font-size:0.8rem;color:var(--text2)">
+                        成功: {{ batchProgress.success }} | 失败: {{ batchProgress.failed }}
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn" @click="showBatchUpload=false">取消</button>
+                <button class="btn primary" :disabled="!batchFiles.length || batchUploading" @click="doBatchUpload">
+                    {{ batchUploading ? '上传中...' : '开始导入' }}
                 </button>
             </div>
         </div>
@@ -472,6 +560,10 @@ const { createApp, ref, reactive, onMounted, computed } = Vue;
 createApp({
     setup() {
         const API = '/api';
+        
+        // 从 URL 获取 token
+        const urlParams = new URLSearchParams(window.location.search);
+        const token = urlParams.get('token') || '';
         
         const loading = ref(false);
         const images = ref([]);
@@ -496,10 +588,26 @@ createApp({
         const uploadPreview = ref('');
         const uploadCat = ref('');
         const uploading = ref(false);
+        const analyzing = ref(false);
+        const uploadAnalysis = ref(null);
+        
+        const showBatchUpload = ref(false);
+        const batchFiles = ref([]);
+        const batchUploadCat = ref('');
+        const batchAutoAnalyze = ref(false);
+        const batchUploading = ref(false);
+        const batchTaskId = ref('');
+        const batchProgress = reactive({ total: 0, processed: 0, success: 0, failed: 0 });
+        const batchMoveCat = ref('');
         
         let searchTimer = null;
         
         const api = async (path, opts = {}) => {
+            const headers = opts.headers || {};
+            if (token) {
+                headers['Authorization'] = 'Bearer ' + token;
+            }
+            opts.headers = headers;
             const res = await fetch(API + path, opts);
             return res.json();
         };
@@ -545,6 +653,12 @@ createApp({
         const debounceSearch = () => {
             clearTimeout(searchTimer);
             searchTimer = setTimeout(() => loadImages(1), 300);
+        };
+        
+        const formatDate = (ts) => {
+            if (!ts) return '未知';
+            const d = new Date(ts * 1000);
+            return d.toLocaleString('zh-CN');
         };
         
         const toggleSelect = (img) => {
@@ -600,12 +714,12 @@ createApp({
             loadImages(page.value);
         };
         
-        const deleteImage = async (img) => {
-            if (!confirm('确定删除？')) return;
+        const deleteImage = async (img, blacklist = false) => {
+            if (!confirm(blacklist ? '确定拉黑此表情？' : '确定删除？')) return;
             await api('/images/delete', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ hash: img.hash })
+                body: JSON.stringify({ hash: img.hash, blacklist })
             });
             preview.value = null;
             loadImages(page.value);
@@ -629,9 +743,34 @@ createApp({
             const file = e.target.files[0];
             if (!file) return;
             uploadFile.value = file;
+            uploadAnalysis.value = null;
             const reader = new FileReader();
             reader.onload = (ev) => uploadPreview.value = ev.target.result;
             reader.readAsDataURL(file);
+        };
+        
+        const analyzeUploadImage = async () => {
+            if (!uploadFile.value) return;
+            analyzing.value = true;
+            uploadAnalysis.value = null;
+            try {
+                const reader = new FileReader();
+                reader.onload = async (e) => {
+                    const r = await api('/analyze', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({ base64: e.target.result })
+                    });
+                    if (r.success) {
+                        uploadAnalysis.value = r;
+                        if (r.category) uploadCat.value = r.category;
+                    }
+                    analyzing.value = false;
+                };
+                reader.readAsDataURL(uploadFile.value);
+            } catch (e) {
+                analyzing.value = false;
+            }
         };
         
         const doUpload = async () => {
@@ -649,6 +788,78 @@ createApp({
             loadStats();
         };
         
+        const onBatchFileSelect = (e) => {
+            batchFiles.value = Array.from(e.target.files);
+        };
+        
+        const doBatchUpload = async () => {
+            if (!batchFiles.value.length) return;
+            batchUploading.value = true;
+            const fd = new FormData();
+            for (const file of batchFiles.value) {
+                fd.append('files', file);
+            }
+            if (batchUploadCat.value) fd.append('category', batchUploadCat.value);
+            fd.append('auto_analyze', batchAutoAnalyze.value ? 'true' : 'false');
+            
+            const r = await api('/images/batch-upload', { method: 'POST', body: fd });
+            if (r.success) {
+                batchTaskId.value = r.task_id;
+                batchProgress.total = r.total;
+                batchProgress.processed = 0;
+                batchProgress.success = 0;
+                batchProgress.failed = 0;
+                pollBatchStatus();
+            }
+            batchUploading.value = false;
+        };
+        
+        let pollTimer = null;
+        const pollBatchStatus = async () => {
+            if (!batchTaskId.value) return;
+            const r = await api('/images/batch-upload-status?task_id=' + batchTaskId.value);
+            if (r.success) {
+                batchProgress.processed = r.processed;
+                batchProgress.success = r.success_count;
+                batchProgress.failed = r.failed_count;
+                if (r.status === 'completed') {
+                    batchTaskId.value = '';
+                    batchFiles.value = [];
+                    loadImages(1);
+                    loadStats();
+                    return;
+                }
+                if (r.status === 'failed') {
+                    batchTaskId.value = '';
+                    return;
+                }
+            }
+            pollTimer = setTimeout(pollBatchStatus, 1000);
+        };
+        
+        const batchMove = async () => {
+            if (!batchMoveCat.value || !selected.size) return;
+            await api('/images/batch-move', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ hashes: [...selected], category: batchMoveCat.value })
+            });
+            selected.clear();
+            batchMoveCat.value = '';
+            loadImages(page.value);
+        };
+        
+        const batchScope = async (scope) => {
+            if (!selected.size) return;
+            await api('/images/batch-scope', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ hashes: [...selected], scope_mode: scope })
+            });
+            selected.clear();
+            loadImages(page.value);
+        };
+        
         onMounted(async () => {
             await Promise.all([loadStats(), loadCategories()]);
             await loadImages(1);
@@ -659,8 +870,12 @@ createApp({
             selectedCat, search, sortOrder, batchMode, selected,
             preview, editing, editForm, startEdit, saveEdit, toggleScope, deleteImage,
             showUpload, uploadFile, uploadPreview, uploadCat, uploading,
-            loadImages, debounceSearch, toggleSelect, openPreview,
+            analyzing, uploadAnalysis, analyzeUploadImage,
+            showBatchUpload, batchFiles, batchUploadCat, batchAutoAnalyze, batchUploading,
+            batchTaskId, batchProgress, batchMoveCat,
+            loadImages, debounceSearch, toggleSelect, openPreview, formatDate,
             onFileSelect, doUpload, batchDelete,
+            onBatchFileSelect, doBatchUpload, batchMove, batchScope,
         };
     }
 }).mount('#app');

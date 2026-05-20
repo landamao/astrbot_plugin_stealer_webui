@@ -23,6 +23,7 @@ class Main(Star):
         # 配置项
         self.port = int(self.config.get("port", 8765))
         self.host = str(self.config.get("host", "0.0.0.0"))
+        self.token = str(self.config.get("token", "")).strip()
         
         # 目标插件实例（延迟获取）
         self._stealer_plugin: Optional[Any] = None
@@ -57,6 +58,7 @@ class Main(Star):
             plugin=self._stealer_plugin,
             host=self.host,
             port=self.port,
+            token=self.token,
             data_dir=Path(__file__).parent / "pages"
         )
         self._server_task = asyncio.create_task(self._web_server.start())
