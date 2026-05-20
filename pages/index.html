@@ -265,27 +265,62 @@
         
         @keyframes spin { to { transform: rotate(360deg); } }
         .spinner { display: inline-block; width: 20px; height: 20px; border: 2px solid var(--border); border-top-color: var(--gold); border-radius: 50%; animation: spin 0.8s linear infinite; }
+        
+        /* Login Page */
+        .login-page {
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: var(--bg);
+        }
+        .login-box {
+            background: var(--bg2);
+            border: 2px solid var(--gold-dim);
+            padding: 40px;
+            width: 320px;
+            text-align: center;
+        }
     </style>
 </head>
 <body>
 <div id="app" v-cloak>
-    <div class="app">
+    <!-- Login Page -->
+    <div v-if="needLogin && !isLoggedIn" class="login-page">
+        <div class="login-box">
+            <h1 style="color:var(--gold);margin-bottom:24px;font-size:1.3rem">表情包管理</h1>
+            <div class="form-group">
+                <input class="form-input" type="password" v-model="loginPassword" 
+                       placeholder="请输入密码" @keyup.enter="doLogin" autofocus>
+            </div>
+            <button class="btn primary" style="width:100%" @click="doLogin" :disabled="loggingIn">
+                {{ loggingIn ? '登录中...' : '登录' }}
+            </button>
+            <p v-if="loginError" style="color:var(--danger);margin-top:12px;font-size:0.85rem">{{ loginError }}</p>
+        </div>
+    </div>
+
+    <!-- Main App -->
+    <div v-else class="app">
         <!-- Header -->
         <header class="header">
             <h1>表情包管理</h1>
-            <div class="stats">
-                <div class="stat">
-                    <div class="stat-val">{{ stats.total || 0 }}</div>
-                    <div class="stat-label">总数</div>
+            <div style="display:flex;align-items:center;gap:16px">
+                <div class="stats">
+                    <div class="stat">
+                        <div class="stat-val">{{ stats.total || 0 }}</div>
+                        <div class="stat-label">总数</div>
+                    </div>
+                    <div class="stat">
+                        <div class="stat-val">{{ stats.categories || 0 }}</div>
+                        <div class="stat-label">分类</div>
+                    </div>
+                    <div class="stat">
+                        <div class="stat-val">{{ stats.today || 0 }}</div>
+                        <div class="stat-label">今日</div>
+                    </div>
                 </div>
-                <div class="stat">
-                    <div class="stat-val">{{ stats.categories || 0 }}</div>
-                    <div class="stat-label">分类</div>
-                </div>
-                <div class="stat">
-                    <div class="stat-val">{{ stats.today || 0 }}</div>
-                    <div class="stat-label">今日</div>
-                </div>
+                <button v-if="needLogin" class="btn" @click="doLogout" style="font-size:0.8rem">退出</button>
             </div>
         </header>
 
@@ -561,9 +596,12 @@ createApp({
     setup() {
         const API = '/api';
         
-        // 从 URL 获取 token
-        const urlParams = new URLSearchParams(window.location.search);
-        const token = urlParams.get('token') || '';
+        // 登录相关
+        const needLogin = ref(false);
+        const isLoggedIn = ref(false);
+        const loginPassword = ref('');
+        const loginError = ref('');
+        const loggingIn = ref(false);
         
         const loading = ref(false);
         const images = ref([]);
@@ -603,12 +641,11 @@ createApp({
         let searchTimer = null;
         
         const api = async (path, opts = {}) => {
-            const headers = opts.headers || {};
-            if (token) {
-                headers['Authorization'] = 'Bearer ' + token;
-            }
-            opts.headers = headers;
             const res = await fetch(API + path, opts);
+            if (res.status === 401) {
+                isLoggedIn.value = false;
+                throw new Error('未登录');
+            }
             return res.json();
         };
         
@@ -860,12 +897,63 @@ createApp({
             loadImages(page.value);
         };
         
+        const checkAuth = async () => {
+            try {
+                const r = await fetch(API + '/check-auth');
+                const data = await r.json();
+                needLogin.value = data.auth_required;
+                if (!data.auth_required) {
+                    isLoggedIn.value = true;
+                }
+            } catch (e) {
+                // 如果检查失败，可能需要登录
+                needLogin.value = true;
+            }
+        };
+        
+        const doLogin = async () => {
+            if (!loginPassword.value) return;
+            loggingIn.value = true;
+            loginError.value = '';
+            try {
+                const r = await fetch(API + '/login', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ password: loginPassword.value })
+                });
+                const data = await r.json();
+                if (data.success) {
+                    isLoggedIn.value = true;
+                    loginPassword.value = '';
+                    // 加载数据
+                    await Promise.all([loadStats(), loadCategories()]);
+                    await loadImages(1);
+                } else {
+                    loginError.value = data.error || '密码错误';
+                }
+            } catch (e) {
+                loginError.value = '登录失败';
+            }
+            loggingIn.value = false;
+        };
+        
+        const doLogout = async () => {
+            try {
+                await fetch(API + '/logout');
+            } catch (e) {}
+            isLoggedIn.value = false;
+        };
+        
         onMounted(async () => {
-            await Promise.all([loadStats(), loadCategories()]);
-            await loadImages(1);
+            await checkAuth();
+            if (isLoggedIn.value || !needLogin.value) {
+                await Promise.all([loadStats(), loadCategories()]);
+                await loadImages(1);
+            }
         });
         
         return {
+            needLogin, isLoggedIn, loginPassword, loginError, loggingIn, doLogin, doLogout,
             loading, images, categories, imgData, stats, page, pageSize, total,
             selectedCat, search, sortOrder, batchMode, selected,
             preview, editing, editForm, startEdit, saveEdit, toggleScope, deleteImage,

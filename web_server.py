@@ -19,14 +19,18 @@ class WebServer:
 
     ALLOWED_IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp")
 
-    def __init__(self, plugin: Any, host: str = "0.0.0.0", port: int = 8765, token: str = "", data_dir: Path = None):
+    def __init__(self, plugin: Any, host: str = "0.0.0.0", port: int = 8765, password: str = "", data_dir: Path = None):
         self.plugin = plugin
         self.host = host
         self.port = port
-        self.token = token
+        self.password = password
         self.data_dir = data_dir or Path(__file__).parent / "pages"
         self._app: Optional[web.Application] = None
         self._runner: Optional[web.AppRunner] = None
+        # 登录会话存储 {session_id: expire_time}
+        self._sessions: dict[str, float] = {}
+        # 会话有效期 24 小时
+        self._session_ttl = 86400
 
     # ── 便捷属性：直接访问原插件的服务 ──────────────────────
 
@@ -146,29 +150,35 @@ class WebServer:
 
     def _setup_routes(self, app: web.Application):
         """注册所有路由"""
+        import hashlib
+        import secrets
+        
+        def _check_session(request: web.Request) -> bool:
+            """检查是否已登录"""
+            if not self.password:
+                return True
+            session_id = request.cookies.get("session_id", "")
+            if not session_id:
+                return False
+            expire = self._sessions.get(session_id, 0)
+            if time.time() > expire:
+                self._sessions.pop(session_id, None)
+                return False
+            return True
+        
         # Token 鉴权中间件
         @web.middleware
         async def auth_middleware(request: web.Request, handler):
-            # 静态页面通过 query 参数或 cookie 鉴权
-            if request.path == "/":
-                token = request.query.get("token", "")
-                if self.token and token != self.token:
-                    return web.Response(text="Token 无效", status=403)
-                # 设置 cookie 方便后续访问
-                resp = await handler(request)
-                if self.token and token == self.token:
-                    resp.set_cookie("token", token, max_age=86400)
-                return resp
+            # 登录相关路由跳过鉴权
+            if request.path in ("/", "/api/login", "/api/check-auth"):
+                return await handler(request)
             
-            # API 请求检查 header、query 或 cookie
-            if request.path.startswith("/api/"):
-                token = (
-                    request.headers.get("Authorization", "").replace("Bearer ", "")
-                    or request.query.get("token", "")
-                    or request.cookies.get("token", "")
-                )
-                if self.token and token != self.token:
-                    return web.json_response({"success": False, "error": "未授权"}, status=401)
+            # 检查登录状态
+            if not _check_session(request):
+                if request.path.startswith("/api/"):
+                    return web.json_response({"success": False, "error": "未登录"}, status=401)
+                else:
+                    raise web.HTTPFound("/")
             
             return await handler(request)
 
@@ -176,6 +186,9 @@ class WebServer:
         self._app = app
         # 静态文件
         app.router.add_get("/", self._handle_index)
+        app.router.add_post("/api/login", self._handle_login)
+        app.router.add_get("/api/logout", self._handle_logout)
+        app.router.add_get("/api/check-auth", self._handle_check_auth)
         app.router.add_static("/assets/", path=self.data_dir, name="static")
         
         # API 路由
@@ -209,10 +222,10 @@ class WebServer:
         site = web.TCPSite(self._runner, self.host, self.port)
         await site.start()
         logger.info(f"[StealerWebUI] HTTP服务器监听: {self.host}:{self.port}")
-        if self.token:
-            logger.info("[StealerWebUI] Token 鉴权已启用")
+        if self.password:
+            logger.info("[StealerWebUI] 密码鉴权已启用")
         else:
-            logger.warning("[StealerWebUI] Token 鉴权未启用，建议设置 token")
+            logger.warning("[StealerWebUI] 密码鉴权未启用，建议设置 password")
 
     async def stop(self):
         """停止服务器"""
@@ -227,12 +240,42 @@ class WebServer:
         if not index_path.exists():
             return web.Response(text="页面文件不存在", status=404)
         
-        # 读取并替换 API 路径前缀
         content = index_path.read_text(encoding="utf-8")
-        # 前端使用相对路径 /astrbot_plugin_stealer/，替换为 /api/
-        content = content.replace("/astrbot_plugin_stealer/", "/api/")
-        
         return web.Response(text=content, content_type="text/html")
+    
+    async def _handle_login(self, request: web.Request) -> web.Response:
+        """处理登录请求"""
+        import secrets
+        try:
+            data = await request.json()
+            password = data.get("password", "")
+            
+            if password != self.password:
+                return web.json_response({"success": False, "error": "密码错误"})
+            
+            # 创建会话
+            session_id = secrets.token_hex(32)
+            self._sessions[session_id] = time.time() + self._session_ttl
+            
+            resp = web.json_response({"success": True})
+            resp.set_cookie("session_id", session_id, max_age=self._session_ttl, httponly=True)
+            return resp
+        except Exception as e:
+            return web.json_response({"success": False, "error": str(e)})
+    
+    async def _handle_logout(self, request: web.Request) -> web.Response:
+        """处理登出请求"""
+        session_id = request.cookies.get("session_id", "")
+        self._sessions.pop(session_id, None)
+        resp = web.json_response({"success": True})
+        resp.del_cookie("session_id")
+        return resp
+    
+    async def _handle_check_auth(self, request: web.Request) -> web.Response:
+        """检查登录状态"""
+        if not self.password:
+            return web.json_response({"success": True, "auth_required": False})
+        return web.json_response({"success": True, "auth_required": True})
 
     # ── API 路由处理 ──────────────────────────────────────
 

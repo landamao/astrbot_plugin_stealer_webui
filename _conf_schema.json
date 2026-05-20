@@ -11,10 +11,10 @@
     "default": "0.0.0.0",
     "hint": "0.0.0.0 允许所有地址访问，127.0.0.1 仅本机"
   },
-  "token": {
-    "description": "访问Token",
+  "password": {
+    "description": "登录密码",
     "type": "string",
     "default": "",
-    "hint": "留空则不鉴权，设置后URL需带 ?token=xxx"
+    "hint": "留空则不鉴权，设置后需要密码登录才能访问"
   }
 }
