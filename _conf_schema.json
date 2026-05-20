@@ -8,7 +8,7 @@
   "host": {
     "description": "监听地址",
     "type": "string",
-    "default": "0.0.0.0",
+    "default": "127.0.0.1",
     "hint": "0.0.0.0 允许所有地址访问，127.0.0.1 仅本机"
   },
   "password": {

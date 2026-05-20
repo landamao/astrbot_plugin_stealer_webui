@@ -281,17 +281,21 @@
             width: 320px;
             text-align: center;
         }
+        
+        /* Hide app until ready */
+        #app { display: none; }
+        #app.visible { display: block; }
     </style>
 </head>
 <body>
-<div id="app" v-cloak>
-    <!-- Loading -->
-    <div v-if="checking" class="login-page">
-        <div style="color:var(--gold)">加载中...</div>
-    </div>
-    
+<!-- Loading state outside Vue app -->
+<div id="loading" style="min-height:100vh;display:flex;align-items:center;justify-content:center;background:#0a0e14">
+    <div style="color:#d4b46e">加载中...</div>
+</div>
+
+<div id="app">
     <!-- Login Page -->
-    <div v-else-if="needLogin && !isLoggedIn" class="login-page">
+    <div v-if="needLogin && !isLoggedIn" class="login-page">
         <div class="login-box">
             <h1 style="color:var(--gold);margin-bottom:24px;font-size:1.3rem">表情包管理</h1>
             <div class="form-group">
@@ -602,7 +606,6 @@ createApp({
         const API = '/api';
         
         // 登录相关
-        const checking = ref(true);
         const needLogin = ref(false);
         const isLoggedIn = ref(false);
         const loginPassword = ref('');
@@ -926,8 +929,6 @@ createApp({
             } catch (e) {
                 needLogin.value = true;
                 isLoggedIn.value = false;
-            } finally {
-                checking.value = false;
             }
         };
         
@@ -965,7 +966,16 @@ createApp({
         };
         
         onMounted(async () => {
-            await checkAuth();
+            try {
+                await checkAuth();
+            } catch (e) {
+                console.error('Auth check failed:', e);
+            }
+            // Hide loading, show app
+            const loading = document.getElementById('loading');
+            const app = document.getElementById('app');
+            if (loading) loading.style.display = 'none';
+            if (app) app.classList.add('visible');
             if (isLoggedIn.value || !needLogin.value) {
                 await Promise.all([loadStats(), loadCategories()]);
                 await loadImages(1);
@@ -973,7 +983,7 @@ createApp({
         });
         
         return {
-            checking, needLogin, isLoggedIn, loginPassword, loginError, loggingIn, doLogin, doLogout,
+            needLogin, isLoggedIn, loginPassword, loginError, loggingIn, doLogin, doLogout,
             loading, images, categories, imgData, stats, page, pageSize, total,
             selectedCat, search, sortOrder, batchMode, selected,
             preview, editing, editForm, startEdit, saveEdit, toggleScope, deleteImage,
