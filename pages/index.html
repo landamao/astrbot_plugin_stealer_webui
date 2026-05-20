@@ -899,15 +899,27 @@ createApp({
         
         const checkAuth = async () => {
             try {
+                // 先检查是否需要鉴权
                 const r = await fetch(API + '/check-auth');
                 const data = await r.json();
                 needLogin.value = data.auth_required;
-                if (!data.auth_required) {
+                
+                if (data.auth_required) {
+                    // 尝试访问需要鉴权的接口来检查是否已登录
+                    try {
+                        const testRes = await fetch(API + '/stats');
+                        if (testRes.ok) {
+                            isLoggedIn.value = true;
+                        }
+                    } catch (e) {
+                        isLoggedIn.value = false;
+                    }
+                } else {
                     isLoggedIn.value = true;
                 }
             } catch (e) {
-                // 如果检查失败，可能需要登录
                 needLogin.value = true;
+                isLoggedIn.value = false;
             }
         };
         
