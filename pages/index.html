@@ -285,8 +285,13 @@
 </head>
 <body>
 <div id="app" v-cloak>
+    <!-- Loading -->
+    <div v-if="checking" class="login-page">
+        <div style="color:var(--gold)">加载中...</div>
+    </div>
+    
     <!-- Login Page -->
-    <div v-if="needLogin && !isLoggedIn" class="login-page">
+    <div v-else-if="needLogin && !isLoggedIn" class="login-page">
         <div class="login-box">
             <h1 style="color:var(--gold);margin-bottom:24px;font-size:1.3rem">表情包管理</h1>
             <div class="form-group">
@@ -597,6 +602,7 @@ createApp({
         const API = '/api';
         
         // 登录相关
+        const checking = ref(true);
         const needLogin = ref(false);
         const isLoggedIn = ref(false);
         const loginPassword = ref('');
@@ -920,6 +926,8 @@ createApp({
             } catch (e) {
                 needLogin.value = true;
                 isLoggedIn.value = false;
+            } finally {
+                checking.value = false;
             }
         };
         
@@ -965,7 +973,7 @@ createApp({
         });
         
         return {
-            needLogin, isLoggedIn, loginPassword, loginError, loggingIn, doLogin, doLogout,
+            checking, needLogin, isLoggedIn, loginPassword, loginError, loggingIn, doLogin, doLogout,
             loading, images, categories, imgData, stats, page, pageSize, total,
             selectedCat, search, sortOrder, batchMode, selected,
             preview, editing, editForm, startEdit, saveEdit, toggleScope, deleteImage,
