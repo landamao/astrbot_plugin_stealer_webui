@@ -1,0 +1,669 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>表情包管理 - 独立面板</title>
+    <script src="https://cdn.jsdelivr.net/npm/vue@3.4/dist/vue.global.prod.js"></script>
+    <style>
+        :root {
+            --bg: #0a0e14;
+            --bg2: #111820;
+            --bg3: #1a2230;
+            --border: #2d3748;
+            --gold: #d4b46e;
+            --gold-dim: #7a632b;
+            --text: #e6e6e6;
+            --text2: #94a3b8;
+            --danger: #ef4444;
+            --success: #22c55e;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { background: var(--bg); color: var(--text); font-family: -apple-system, sans-serif; }
+        
+        .app { min-height: 100vh; display: flex; flex-direction: column; }
+        
+        /* Header */
+        .header {
+            background: var(--bg2);
+            border-bottom: 2px solid var(--gold);
+            padding: 16px 24px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .header h1 { color: var(--gold); font-size: 1.3rem; }
+        .stats { display: flex; gap: 20px; }
+        .stat { text-align: center; }
+        .stat-val { font-size: 1.4rem; color: var(--gold); font-weight: bold; }
+        .stat-label { font-size: 0.7rem; color: var(--text2); text-transform: uppercase; }
+        
+        /* Layout */
+        .main { flex: 1; display: flex; padding: 16px; gap: 16px; }
+        .sidebar { width: 200px; flex-shrink: 0; }
+        .content { flex: 1; min-width: 0; }
+        
+        /* Categories */
+        .cat-list { display: flex; flex-direction: column; gap: 4px; }
+        .cat-item {
+            padding: 10px 14px;
+            background: var(--bg2);
+            border: 1px solid transparent;
+            border-left: 3px solid transparent;
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+            transition: all 0.2s;
+        }
+        .cat-item:hover { background: var(--bg3); }
+        .cat-item.active { border-left-color: var(--gold); background: var(--bg3); color: var(--gold); }
+        .cat-count { color: var(--text2); font-size: 0.8rem; }
+        
+        /* Toolbar */
+        .toolbar {
+            display: flex;
+            gap: 12px;
+            margin-bottom: 16px;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+        .search-box {
+            flex: 1;
+            min-width: 200px;
+            padding: 10px 14px;
+            background: var(--bg2);
+            border: 1px solid var(--border);
+            color: var(--text);
+            font-size: 0.9rem;
+            outline: none;
+        }
+        .search-box:focus { border-color: var(--gold); }
+        
+        .btn {
+            padding: 10px 16px;
+            background: var(--bg3);
+            border: 1px solid var(--border);
+            color: var(--text);
+            cursor: pointer;
+            font-size: 0.85rem;
+            transition: all 0.2s;
+        }
+        .btn:hover { border-color: var(--gold); color: var(--gold); }
+        .btn.primary { background: var(--gold-dim); border-color: var(--gold); color: var(--gold); }
+        .btn.danger { border-color: var(--danger); color: var(--danger); }
+        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        
+        /* Grid */
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+            gap: 12px;
+        }
+        .item {
+            background: var(--bg2);
+            border: 2px solid var(--border);
+            cursor: pointer;
+            overflow: hidden;
+            transition: all 0.2s;
+            position: relative;
+        }
+        .item:hover { border-color: var(--gold-dim); transform: translateY(-2px); }
+        .item.selected { border-color: var(--gold); }
+        .item img {
+            width: 100%;
+            aspect-ratio: 1;
+            object-fit: cover;
+            display: block;
+            background: var(--bg);
+        }
+        .item-info {
+            padding: 8px;
+            font-size: 0.75rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .item-cat { color: var(--gold); }
+        .item-scope {
+            font-size: 0.65rem;
+            padding: 2px 6px;
+            border-radius: 3px;
+        }
+        .scope-public { background: #1a3a2a; color: var(--success); }
+        .scope-local { background: #3a2a1a; color: #f59e0b; }
+        
+        /* Batch indicator */
+        .batch-check {
+            position: absolute;
+            top: 8px;
+            left: 8px;
+            width: 24px;
+            height: 24px;
+            background: var(--gold);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--bg);
+            font-weight: bold;
+        }
+        
+        /* Modal */
+        .modal-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.7);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 100;
+        }
+        .modal {
+            background: var(--bg2);
+            border: 2px solid var(--gold-dim);
+            width: 90%;
+            max-width: 600px;
+            max-height: 90vh;
+            overflow-y: auto;
+        }
+        .modal-header {
+            padding: 16px 20px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .modal-header h2 { color: var(--gold); font-size: 1.1rem; }
+        .modal-close {
+            background: none;
+            border: none;
+            color: var(--text2);
+            cursor: pointer;
+            font-size: 1.2rem;
+        }
+        .modal-body { padding: 20px; }
+        .modal-footer {
+            padding: 16px 20px;
+            border-top: 1px solid var(--border);
+            display: flex;
+            gap: 10px;
+            justify-content: flex-end;
+        }
+        
+        /* Preview */
+        .preview-row { display: flex; gap: 20px; }
+        .preview-img { flex: 1; }
+        .preview-img img { width: 100%; max-height: 400px; object-fit: contain; background: var(--bg); }
+        .preview-info { width: 250px; }
+        .info-row { margin-bottom: 12px; }
+        .info-label { font-size: 0.7rem; color: var(--text2); text-transform: uppercase; margin-bottom: 4px; }
+        .info-value { color: var(--text); }
+        
+        /* Tags */
+        .tags { display: flex; flex-wrap: wrap; gap: 6px; }
+        .tag {
+            padding: 4px 10px;
+            background: var(--bg3);
+            border: 1px solid var(--border);
+            font-size: 0.75rem;
+            color: var(--text2);
+        }
+        
+        /* Form */
+        .form-group { margin-bottom: 16px; }
+        .form-label {
+            display: block;
+            font-size: 0.7rem;
+            color: var(--text2);
+            text-transform: uppercase;
+            margin-bottom: 6px;
+        }
+        .form-input, .form-select, .form-textarea {
+            width: 100%;
+            padding: 10px;
+            background: var(--bg);
+            border: 1px solid var(--border);
+            color: var(--text);
+            font-size: 0.9rem;
+        }
+        .form-textarea { min-height: 60px; resize: vertical; }
+        .form-input:focus, .form-select:focus, .form-textarea:focus {
+            outline: none;
+            border-color: var(--gold);
+        }
+        
+        /* Pagination */
+        .pagination {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 16px;
+            margin-top: 20px;
+            padding: 16px;
+        }
+        .page-info { color: var(--text2); }
+        
+        /* Upload area */
+        .upload-area {
+            border: 2px dashed var(--border);
+            padding: 40px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .upload-area:hover { border-color: var(--gold); }
+        .upload-preview { max-width: 200px; max-height: 200px; margin: 0 auto 10px; display: block; }
+        
+        /* Empty state */
+        .empty {
+            text-align: center;
+            padding: 60px 20px;
+            color: var(--text2);
+        }
+        
+        /* Loading */
+        .loading { text-align: center; padding: 40px; color: var(--gold); }
+        
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .spinner { display: inline-block; width: 20px; height: 20px; border: 2px solid var(--border); border-top-color: var(--gold); border-radius: 50%; animation: spin 0.8s linear infinite; }
+    </style>
+</head>
+<body>
+<div id="app" v-cloak>
+    <div class="app">
+        <!-- Header -->
+        <header class="header">
+            <h1>表情包管理</h1>
+            <div class="stats">
+                <div class="stat">
+                    <div class="stat-val">{{ stats.total || 0 }}</div>
+                    <div class="stat-label">总数</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-val">{{ stats.categories || 0 }}</div>
+                    <div class="stat-label">分类</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-val">{{ stats.today || 0 }}</div>
+                    <div class="stat-label">今日</div>
+                </div>
+            </div>
+        </header>
+
+        <div class="main">
+            <!-- Sidebar -->
+            <aside class="sidebar">
+                <div class="cat-list">
+                    <div class="cat-item" :class="{active: !selectedCat}" @click="selectedCat=''; loadImages(1)">
+                        <span>全部</span>
+                        <span class="cat-count">{{ stats.total || 0 }}</span>
+                    </div>
+                    <div v-for="cat in categories" :key="cat.key" class="cat-item"
+                         :class="{active: selectedCat===cat.key}" @click="selectedCat=cat.key; loadImages(1)">
+                        <span>{{ cat.name || cat.key }}</span>
+                        <span class="cat-count">{{ cat.count }}</span>
+                    </div>
+                </div>
+            </aside>
+
+            <!-- Content -->
+            <div class="content">
+                <!-- Toolbar -->
+                <div class="toolbar">
+                    <input class="search-box" v-model="search" @input="debounceSearch" placeholder="搜索...">
+                    <select class="btn" v-model="sortOrder" @change="loadImages(1)">
+                        <option value="newest">最新</option>
+                        <option value="oldest">最早</option>
+                    </select>
+                    <button class="btn" :class="{primary: batchMode}" @click="batchMode=!batchMode; selected.clear()">
+                        {{ batchMode ? '取消批量' : '批量' }}
+                    </button>
+                    <button v-if="batchMode && selected.size" class="btn danger" @click="batchDelete">删除 ({{ selected.size }})</button>
+                    <button class="btn primary" @click="showUpload=true">+ 添加</button>
+                </div>
+
+                <!-- Loading -->
+                <div v-if="loading" class="loading"><span class="spinner"></span> 加载中...</div>
+
+                <!-- Empty -->
+                <div v-else-if="!images.length" class="empty">暂无表情包</div>
+
+                <!-- Grid -->
+                <div v-else class="grid">
+                    <div v-for="img in images" :key="img.hash" class="item"
+                         :class="{selected: selected.has(img.hash)}"
+                         @click="batchMode ? toggleSelect(img) : openPreview(img)">
+                        <div v-if="batchMode && selected.has(img.hash)" class="batch-check">✓</div>
+                        <img :src="imgData[img.hash] || ''" loading="lazy">
+                        <div class="item-info">
+                            <span class="item-cat">{{ img.category }}</span>
+                            <span class="item-scope" :class="'scope-'+img.scope_mode">{{ img.scope_mode }}</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Pagination -->
+                <div v-if="total > pageSize" class="pagination">
+                    <button class="btn" :disabled="page<=1" @click="loadImages(page-1)">上一页</button>
+                    <span class="page-info">{{ page }} / {{ Math.ceil(total/pageSize) }}</span>
+                    <button class="btn" :disabled="page*pageSize>=total" @click="loadImages(page+1)">下一页</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Preview Modal -->
+    <div v-if="preview" class="modal-overlay" @click.self="preview=null">
+        <div class="modal" style="max-width:800px">
+            <div class="modal-header">
+                <h2>{{ editing ? '编辑' : '详情' }}</h2>
+                <button class="modal-close" @click="preview=null; editing=false">✕</button>
+            </div>
+            <div class="modal-body">
+                <template v-if="!editing">
+                    <div class="preview-row">
+                        <div class="preview-img">
+                            <img :src="imgData[preview.hash] || ''">
+                        </div>
+                        <div class="preview-info">
+                            <div class="info-row">
+                                <div class="info-label">分类</div>
+                                <div class="info-value">{{ preview.category }}</div>
+                            </div>
+                            <div class="info-row">
+                                <div class="info-label">作用域</div>
+                                <div class="info-value">{{ preview.scope_mode }}</div>
+                            </div>
+                            <div class="info-row">
+                                <div class="info-label">描述</div>
+                                <div class="info-value">{{ preview.desc || '暂无' }}</div>
+                            </div>
+                            <div class="info-row">
+                                <div class="info-label">标签</div>
+                                <div class="tags">
+                                    <span v-for="t in preview.tags" :key="t" class="tag">{{ t }}</span>
+                                    <span v-if="!preview.tags?.length" style="color:var(--text2);font-size:0.8rem">无</span>
+                                </div>
+                            </div>
+                            <div class="info-row">
+                                <div class="info-label">场景</div>
+                                <div class="tags">
+                                    <span v-for="s in preview.scenes" :key="s" class="tag">{{ s }}</span>
+                                    <span v-if="!preview.scenes?.length" style="color:var(--text2);font-size:0.8rem">无</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </template>
+                <template v-else>
+                    <div class="form-group">
+                        <label class="form-label">分类</label>
+                        <select class="form-select" v-model="editForm.category">
+                            <option v-for="c in categories" :key="c.key" :value="c.key">{{ c.name || c.key }}</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">作用域</label>
+                        <select class="form-select" v-model="editForm.scope_mode">
+                            <option value="public">公共</option>
+                            <option value="local">本群限定</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">描述</label>
+                        <textarea class="form-textarea" v-model="editForm.desc"></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">标签 (逗号分隔)</label>
+                        <input class="form-input" v-model="editForm.tags">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">场景 (顿号/逗号分隔)</label>
+                        <input class="form-input" v-model="editForm.scenes">
+                    </div>
+                </template>
+            </div>
+            <div class="modal-footer">
+                <template v-if="!editing">
+                    <button class="btn" @click="startEdit">编辑</button>
+                    <button class="btn" @click="toggleScope">{{ preview.scope_mode==='local' ? '解除限定' : '限定本群' }}</button>
+                    <button class="btn danger" @click="deleteImage(preview)">删除</button>
+                </template>
+                <template v-else>
+                    <button class="btn" @click="editing=false">取消</button>
+                    <button class="btn primary" @click="saveEdit">保存</button>
+                </template>
+            </div>
+        </div>
+    </div>
+
+    <!-- Upload Modal -->
+    <div v-if="showUpload" class="modal-overlay" @click.self="showUpload=false">
+        <div class="modal">
+            <div class="modal-header">
+                <h2>添加表情包</h2>
+                <button class="modal-close" @click="showUpload=false">✕</button>
+            </div>
+            <div class="modal-body">
+                <div class="upload-area" @click="$refs.fileInput.click()">
+                    <input ref="fileInput" type="file" accept="image/*" @change="onFileSelect" style="display:none">
+                    <img v-if="uploadPreview" :src="uploadPreview" class="upload-preview">
+                    <p v-else style="color:var(--text2)">点击上传图片</p>
+                </div>
+                <div class="form-group" style="margin-top:16px">
+                    <label class="form-label">分类</label>
+                    <select class="form-select" v-model="uploadCat">
+                        <option v-for="c in categories" :key="c.key" :value="c.key">{{ c.name || c.key }}</option>
+                    </select>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn" @click="showUpload=false">取消</button>
+                <button class="btn primary" :disabled="!uploadFile || uploading" @click="doUpload">
+                    {{ uploading ? '上传中...' : '确认添加' }}
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+const { createApp, ref, reactive, onMounted, computed } = Vue;
+
+createApp({
+    setup() {
+        const API = '/api';
+        
+        const loading = ref(false);
+        const images = ref([]);
+        const categories = ref([]);
+        const imgData = reactive({});
+        const stats = reactive({ total: 0, categories: 0, today: 0 });
+        const page = ref(1);
+        const pageSize = 50;
+        const total = ref(0);
+        const selectedCat = ref('');
+        const search = ref('');
+        const sortOrder = ref('newest');
+        const batchMode = ref(false);
+        const selected = reactive(new Set());
+        
+        const preview = ref(null);
+        const editing = ref(false);
+        const editForm = reactive({ category: '', scope_mode: 'public', desc: '', tags: '', scenes: '' });
+        
+        const showUpload = ref(false);
+        const uploadFile = ref(null);
+        const uploadPreview = ref('');
+        const uploadCat = ref('');
+        const uploading = ref(false);
+        
+        let searchTimer = null;
+        
+        const api = async (path, opts = {}) => {
+            const res = await fetch(API + path, opts);
+            return res.json();
+        };
+        
+        const loadStats = async () => {
+            const r = await api('/stats');
+            if (r.success) Object.assign(stats, r.stats);
+        };
+        
+        const loadCategories = async () => {
+            const r = await api('/categories');
+            if (r.success) {
+                categories.value = Object.entries(r.categories).map(([k, v]) => ({
+                    key: k, name: k, count: v
+                }));
+            }
+        };
+        
+        const loadImages = async (p = 1) => {
+            loading.value = true;
+            page.value = p;
+            const params = new URLSearchParams({ page: p, size: pageSize, sort: sortOrder.value });
+            if (selectedCat.value) params.set('category', selectedCat.value);
+            if (search.value) params.set('q', search.value);
+            const r = await api('/images?' + params);
+            if (r.success) {
+                images.value = r.images;
+                total.value = r.total;
+                if (r.categories) categories.value = r.categories;
+                // Load image data
+                for (const img of r.images) {
+                    if (!imgData[img.hash]) loadImageData(img.hash);
+                }
+            }
+            loading.value = false;
+        };
+        
+        const loadImageData = async (hash) => {
+            const r = await api('/image-data?hash=' + hash);
+            if (r.success) imgData[hash] = r.url;
+        };
+        
+        const debounceSearch = () => {
+            clearTimeout(searchTimer);
+            searchTimer = setTimeout(() => loadImages(1), 300);
+        };
+        
+        const toggleSelect = (img) => {
+            if (selected.has(img.hash)) selected.delete(img.hash);
+            else selected.add(img.hash);
+        };
+        
+        const openPreview = (img) => {
+            preview.value = img;
+            editing.value = false;
+        };
+        
+        const startEdit = () => {
+            if (!preview.value) return;
+            editForm.category = preview.value.category;
+            editForm.scope_mode = preview.value.scope_mode;
+            editForm.desc = preview.value.desc || '';
+            editForm.tags = (preview.value.tags || []).join(', ');
+            editForm.scenes = (preview.value.scenes || []).join('、');
+            editing.value = true;
+        };
+        
+        const saveEdit = async () => {
+            const r = await api('/images/update', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    hash: preview.value.hash,
+                    category: editForm.category,
+                    scope_mode: editForm.scope_mode,
+                    desc: editForm.desc,
+                    tags: editForm.tags,
+                    scenes: editForm.scenes,
+                })
+            });
+            if (r.success) {
+                editing.value = false;
+                preview.value = null;
+                loadImages(page.value);
+                loadStats();
+            }
+        };
+        
+        const toggleScope = async () => {
+            if (!preview.value) return;
+            const newScope = preview.value.scope_mode === 'local' ? 'public' : 'local';
+            await api('/images/update', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ hash: preview.value.hash, scope_mode: newScope })
+            });
+            preview.value = null;
+            loadImages(page.value);
+        };
+        
+        const deleteImage = async (img) => {
+            if (!confirm('确定删除？')) return;
+            await api('/images/delete', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ hash: img.hash })
+            });
+            preview.value = null;
+            loadImages(page.value);
+            loadStats();
+        };
+        
+        const batchDelete = async () => {
+            if (!confirm(`确定删除 ${selected.size} 张？`)) return;
+            await api('/images/batch-delete', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ hashes: [...selected] })
+            });
+            selected.clear();
+            batchMode.value = false;
+            loadImages(page.value);
+            loadStats();
+        };
+        
+        const onFileSelect = (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            uploadFile.value = file;
+            const reader = new FileReader();
+            reader.onload = (ev) => uploadPreview.value = ev.target.result;
+            reader.readAsDataURL(file);
+        };
+        
+        const doUpload = async () => {
+            if (!uploadFile.value) return;
+            uploading.value = true;
+            const fd = new FormData();
+            fd.append('file', uploadFile.value);
+            fd.append('category', uploadCat.value || 'unknown');
+            await api('/images/upload', { method: 'POST', body: fd });
+            uploading.value = false;
+            showUpload.value = false;
+            uploadFile.value = null;
+            uploadPreview.value = '';
+            loadImages(1);
+            loadStats();
+        };
+        
+        onMounted(async () => {
+            await Promise.all([loadStats(), loadCategories()]);
+            await loadImages(1);
+        });
+        
+        return {
+            loading, images, categories, imgData, stats, page, pageSize, total,
+            selectedCat, search, sortOrder, batchMode, selected,
+            preview, editing, editForm, startEdit, saveEdit, toggleScope, deleteImage,
+            showUpload, uploadFile, uploadPreview, uploadCat, uploading,
+            loadImages, debounceSearch, toggleSelect, openPreview,
+            onFileSelect, doUpload, batchDelete,
+        };
+    }
+}).mount('#app');
+</script>
+</body>
+</html>

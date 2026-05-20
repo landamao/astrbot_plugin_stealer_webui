@@ -1,0 +1,5 @@
+name: astrbot_plugin_stealer_webui
+display_name: 表情包管理独立WebUI
+desc: 为表情包小偷插件提供独立的Web管理界面，通过引用原插件实例直接操作数据
+version: v1.0.0
+author: 懒大猫
